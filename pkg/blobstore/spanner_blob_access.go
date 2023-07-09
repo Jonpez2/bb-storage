@@ -57,7 +57,7 @@ import (
 )
 
 const (
-	maxSize           int64 = 10*1024*1024 - 1
+	maxSize           int64 = 0 // 10*1024*1024 - 1
 	tableName               = "Blobs_v1_0"
 	maxRefBulkSz            = 600 // Maximum number of hashes to gather before doing a bulk reftime update
 	maxRefHours             = 1   // Maximum time to wait before updating reference times
