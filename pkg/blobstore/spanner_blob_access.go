@@ -535,8 +535,12 @@ func NewSpannerBlobAccess(databaseName string, gcsBucketName string, readBufferF
 
 	var maxSpannerSize int64
 	if storageType == pb.StorageType_ACTION_CACHE {
+		log.Print("We're an action cache, so using the spanner inline storage")
+
 		maxSpannerSize = 10*1024*1024 - 1
 	} else {
+		log.Print("We're NOT an action cache, so NOT using the spanner inline storage")
+
 		maxSpannerSize = 0
 	}
 
