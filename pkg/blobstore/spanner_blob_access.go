@@ -57,7 +57,6 @@ import (
 )
 
 const (
-	maxSize           int64 = 0 // 10*1024*1024 - 1
 	tableName               = "Blobs_v1_0"
 	maxRefBulkSz            = 600 // Maximum number of hashes to gather before doing a bulk reftime update
 	maxRefHours             = 1   // Maximum time to wait before updating reference times
@@ -196,6 +195,8 @@ type spannerBlobAccess struct {
 	spannerClient *spanner.Client
 	gcsBucket     *storage.BucketHandle
 
+	maxSpannerSize           int64
+	
 	readBufferFactory ReadBufferFactory
 	storageType       pb.StorageType_Value
 	daysToLive        uint64        // to avoid converting back and forth
@@ -532,9 +533,18 @@ func NewSpannerBlobAccess(databaseName string, gcsBucketName string, readBufferF
 		refCh = make(chan string, maxRefBulkSz)
 	}
 
+	var maxSpannerSize int64
+	if storageType == pb.StorageType_ACTION_CACHE {
+		maxSpannerSize = 10*1024*1024 - 1
+	} else {
+		maxSpannerSize = 0
+	}
+
 	ba := &spannerBlobAccess{
 		spannerClient: spannerClient,
 		gcsBucket:     gcsBucket,
+
+		maxSpannerSize: maxSpannerSize,
 
 		readBufferFactory: readBufferFactory,
 		storageType:       storageType,
@@ -564,7 +574,7 @@ func (ba *spannerBlobAccess) delete(ctx context.Context, key string) error {
 	}
 
 	// Now if it was also in GCS, delete it there
-	if sz > maxSize {
+	if sz > ba.maxSpannerSize {
 		object := ba.gcsBucket.Object(key)
 		start := time.Now()
 		err = object.Delete(ctx)
@@ -617,7 +627,7 @@ func (ba *spannerBlobAccess) Get(ctx context.Context, digest digest.Digest) buff
 	validationFunc := func(dataIsValid bool) {
 		if !dataIsValid {
 			var beType string
-			if sz > maxSize {
+			if sz > ba.maxSpannerSize {
 				beType = BE_GCS
 			} else {
 				beType = BE_SPANNER
@@ -633,7 +643,7 @@ func (ba *spannerBlobAccess) Get(ctx context.Context, digest digest.Digest) buff
 	}
 
 	var b buffer.Buffer
-	if sz > maxSize {
+	if sz > ba.maxSpannerSize {
 		// We gotta go get it from GCS
 		obj := ba.gcsBucket.Object(key)
 
@@ -707,7 +717,7 @@ func (ba *spannerBlobAccess) Put(ctx context.Context, digest digest.Digest, b bu
 		}
 	}
 	now := time.Now().UTC()
-	if size > maxSize {
+	if size > ba.maxSpannerSize {
 		obj := ba.gcsBucket.Object(key)
 		w := obj.NewWriter(ctx)
 		start := time.Now()
@@ -733,7 +743,7 @@ func (ba *spannerBlobAccess) Put(ctx context.Context, digest digest.Digest, b bu
 		inlineData = nil
 		ba.touchGCSObject(context.Background(), key, now)
 	} else {
-		inlineData, err = b.ToByteSlice(int(maxSize))
+		inlineData, err = b.ToByteSlice(int(ba.maxSpannerSize))
 		if err != nil {
 			log.Printf("Blob %s can't be copied to Spanner: %v", digest, err)
 			return err
@@ -840,7 +850,7 @@ func (ba *spannerBlobAccess) FindMissing(ctx context.Context, digests digest.Set
 			if err != nil {
 				spannerMalformedKeyCount.Inc()
 				log.Printf("Couldn't extract size from key %s: %v", key, sz)
-			} else if sz > maxSize {
+			} else if sz > ba.maxSpannerSize {
 				ba.touchGCSObject(context.Background(), key, now)
 			}
 			ksl = append(ksl, key)
@@ -934,7 +944,7 @@ func (ba *spannerBlobAccess) bulkUpdate(in <-chan string) {
 				sz, err := ba.keyToBlobSize(key)
 				if err != nil {
 					spannerMalformedKeyCount.Inc()
-				} else if sz > maxSize {
+				} else if sz > ba.maxSpannerSize {
 					go ba.touchGCSObject(context.Background(), key, now)
 				}
 			}
